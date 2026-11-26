@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>收件人资料检测</title>
+<style>
+:root{color-scheme:light dark}
+body{margin:0}
+
+/* Layout: one working column. Upload + rules on top, summary bar, then the flagged-cell table. */
+:root{
+  --bg:#f6f7f9; --surface:#ffffff; --fg:#1b2230; --muted:#5d6678; --line:#dde1e8;
+  --accent:#0f6b63; --accent-fg:#ffffff; --accent-soft:#e1f1ef;
+  --flag:#ffe94d; --flag-fg:#3a3000; --warn:#a14b00;
+  --font-ui:"IBM Plex Sans","Noto Sans SC",system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#12161d; --surface:#1a2029; --fg:#e8ebf0; --muted:#98a1b3; --line:#2c3441;
+  --accent:#4fc3b6; --accent-fg:#06211e; --accent-soft:#16312f;
+  --flag:#ffe94d; --flag-fg:#2d2600; --warn:#ffb36b; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#12161d; --surface:#1a2029; --fg:#e8ebf0; --muted:#98a1b3; --line:#2c3441;
+  --accent:#4fc3b6; --accent-fg:#06211e; --accent-soft:#16312f;
+  --flag:#ffe94d; --flag-fg:#2d2600; --warn:#ffb36b; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:15px;line-height:1.5;
+  padding-block:24px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1040px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+h1{font-size:1.5rem;line-height:1.25;margin:0;font-weight:600;text-wrap:balance}
+.sub{color:var(--muted);margin:4px 0 0}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:16px}
+.drop{display:flex;align-items:center;gap:16px;flex-wrap:wrap;border:1.5px dashed var(--line);border-radius:8px;padding:16px;background:var(--surface)}
+.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop .txt{flex:1 1 220px;min-width:0}
+.drop b{display:block;overflow-wrap:anywhere}
+.drop small{color:var(--muted)}
+button,.btn{font:inherit;cursor:pointer;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:8px 14px}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:600}
+button.primary:disabled{opacity:.45;cursor:not-allowed}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.note{background:var(--accent-soft);border-radius:6px;padding:8px 12px;font-size:.9rem}
+details>summary{cursor:pointer;font-weight:600}
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:12px}
+.rules label{display:block;font-size:.85rem;color:var(--muted);margin-bottom:4px}
+.rules input[type=text],.rules input[type=number]{width:100%;box-sizing:border-box;font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
+.rules input.mono{font-family:var(--font-mono)}
+.checks{display:flex;flex-direction:column;gap:6px}
+.checks label{display:flex;gap:8px;align-items:center;color:var(--fg);font-size:.95rem;margin:0}
+.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:space-between}
+.stats{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);border-radius:999px;padding:3px 12px;font-size:.88rem;background:var(--surface)}
+.chip b{font-variant-numeric:tabular-nums}
+.chip.total{background:var(--flag);color:var(--flag-fg);border-color:transparent;font-weight:600}
+.filters{display:flex;gap:6px;flex-wrap:wrap}
+.filters button{padding:4px 12px;font-size:.88rem}
+.filters button[aria-pressed=true]{background:var(--accent-soft);border-color:var(--accent);font-weight:600}
+.tablebox{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:640px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top;font-variant-numeric:tabular-nums}
+th{font-size:.78rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--surface)}
+tr:last-child td{border-bottom:0}
+td.cell{font-family:var(--font-mono);font-size:.85rem;white-space:nowrap}
+td.val{overflow-wrap:anywhere;min-width:220px}
+mark{background:var(--flag);color:var(--flag-fg);border-radius:2px;padding:0 1px}
+.tag{display:inline-block;font-size:.78rem;border:1px solid var(--line);border-radius:4px;padding:0 6px;margin:0 4px 2px 0;white-space:nowrap}
+.empty{padding:28px 16px;text-align:center;color:var(--muted)}
+.err{color:var(--warn)}
+.scroll{max-height:560px;overflow-y:auto}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>收件人资料检测</h1>
+    <p class="sub">上传 Excel，找出收件人姓名、地址含特殊字符的格子，以及不足 5 位的邮编，并下载已标黄的文件。文件只在你的浏览器里处理，不会上传到任何地方。</p>
+  </header>
+
+  <div class="drop" id="drop">
+    <div class="txt">
+      <b id="fname">尚未选择文件</b>
+      <small id="fmeta">把 .xlsx 文件拖到这里，或点右边的按钮选择</small>
+    </div>
+    <button class="primary" id="pick" type="button">选择 Excel 文件</button>
+    <button id="sampleBtn" type="button">载入示例</button>
+    <input type="file" id="file" accept=".xlsx" hidden>
+  </div>
+  <div class="note" id="sampleNote" hidden>目前显示的是示例数据。上传你自己的文件后会替换掉它。</div>
+  <div class="err" id="err" role="alert"></div>
+
+  <details class="panel" id="rulesPanel">
+    <summary>检测规则（可修改，结果会即时更新）</summary>
+    <div class="rules">
+      <div>
+        <label for="textCols">检查文字的列（用逗号分隔表头名称）</label>
+        <input type="text" id="textCols" value="Receiver Name, Receiver Address">
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" id="rDigit" checked> 含数字 0-9（下方列除外）</label>
+        <label><input type="checkbox" id="rNonAscii" checked> 含中文、变音符号等非英文字符</label>
+        <label><input type="checkbox" id="rSymbol" checked> 含下面的符号</label>
+      </div>
+      <div>
+        <label for="digitOk">允许含数字的列（这些列不检查数字）</label>
+        <input type="text" id="digitOk" value="Receiver Address">
+      </div>
+      <div>
+        <label for="symbols">要检测的符号</label>
+        <input type="text" class="mono" id="symbols" value="@&amp;/_.()!'‘’?。：；:;&quot;“”=+*">
+      </div>
+      <div>
+        <label for="pcCol">邮编列的表头名称</label>
+        <input type="text" id="pcCol" value="Receiver Postcode">
+      </div>
+      <div>
+        <label for="pcMin">邮编至少要有几位数字</label>
+        <input type="number" id="pcMin" min="1" max="12" value="5">
+      </div>
+    </div>
+  </details>
+
+  <div class="panel bar" id="summaryBar">
+    <div class="stats" id="stats"></div>
+    <button class="primary" id="dl" type="button" disabled>下载标黄的 Excel</button>
+  </div>
+  <div class="filters" id="filters" role="group" aria-label="按列筛选"></div>
+
+  <div class="tablebox"><div class="scroll">
+    <table>
+      <thead><tr><th>工作表</th><th>格子</th><th>列</th><th>内容</th><th>原因</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script>
+(function(){
+  var $ = function(id){return document.getElementById(id)};
+  var srcBuf = null, wb = null, fileName = "workbook.xlsx", isSample = false;
+  var results = [], colFilter = "all", missing = [];
+  var downloads = {save: function(o){
+    var url = URL.createObjectURL(o.data), a = document.createElement("a");
+    a.href = url; a.download = o.filename; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url)}, 4000);
+    return Promise.resolve({status:"saved"});
+  }};
+
+  /* ---------- rules ---------- */
+  function rules(){
+    return {
+      textCols: $("textCols").value.split(/[,，]/).map(function(s){return s.trim()}).filter(Boolean),
+      digit: $("rDigit").checked, digitOk: new Set($("digitOk").value.split(/[,，]/).map(function(x){return x.trim().toLowerCase()}).filter(Boolean)), nonAscii: $("rNonAscii").checked, symbol: $("rSymbol").checked,
+      symbols: new Set(Array.from($("symbols").value)),
+      pcCol: $("pcCol").value.trim(),
+      pcMin: Math.max(1, parseInt($("pcMin").value, 10) || 5)
+    };
+  }
+  function classify(ch, R, col){
+    if (R.digit && !R.digitOk.has(String(col).toLowerCase()) && /\p{Nd}/u.test(ch)) return "数字";
+    if (R.symbol && R.symbols.has(ch)) return "符号";
+    if (R.nonAscii && ch.codePointAt(0) > 127 && !R.symbols.has(ch)) return "非英文字符";
+    return null;
+  }
+  function findHeader(ws, name){
+    var target = name.toLowerCase();
+    var maxR = Math.min(ws.rowCount, 10);
+    for (var r = 1; r <= maxR; r++){
+      var row = ws.getRow(r), hit = null;
+      row.eachCell({includeEmpty:false}, function(c, n){
+        if (!hit && String(c.text).trim().toLowerCase() === target) hit = {col:n, row:r};
+      });
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  function scan(){
+    results = []; missing = [];
+    if (!wb) return render();
+    var R = rules();
+    var wanted = R.textCols.map(function(n){return {name:n, type:"text"}});
+    if (R.pcCol) wanted.push({name:R.pcCol, type:"postcode"});
+    var found = {};
+    wb.eachSheet(function(ws){
+      wanted.forEach(function(w){
+        var h = findHeader(ws, w.name);
+        if (!h) return;
+        found[w.name] = true;
+        for (var r = h.row + 1; r <= ws.rowCount; r++){
+          var cell = ws.getCell(r, h.col);
+          var txt = String(cell.text == null ? "" : cell.text);
+          if (w.type === "postcode"){
+            var n = (txt.match(/\d/g) || []).length;
+            if (n < R.pcMin) results.push({sheet:ws.name, addr:cell.address, row:r, col:w.name, value:txt,
+              reasons:["邮编只有 " + n + " 位（需要 " + R.pcMin + " 位）"], chars:null});
+          } else if (txt.trim()){
+            var reasons = [], chars = new Set();
+            Array.from(txt).forEach(function(ch){
+              var k = classify(ch, R, w.name);
+              if (k){ chars.add(ch); if (reasons.indexOf(k) < 0) reasons.push(k); }
+            });
+            if (reasons.length) results.push({sheet:ws.name, addr:cell.address, row:r, col:w.name, value:txt, reasons:reasons, chars:chars});
+          }
+        }
+      });
+    });
+    wanted.forEach(function(w){ if (!found[w.name]) missing.push(w.name); });
+    render();
+  }
+
+  /* ---------- render ---------- */
+  function mk(tag, cls, text){
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function render(){
+    $("err").textContent = missing.length && wb ? "找不到这些表头：" + missing.join("、") + "（请检查规则里的列名）" : "";
+    var counts = {};
+    results.forEach(function(r){counts[r.col] = (counts[r.col] || 0) + 1});
+
+    var stats = $("stats"); stats.textContent = "";
+    var tot = mk("span", "chip total"); tot.append("共标出 ", mk("b", null, String(results.length)), " 格");
+    stats.append(tot);
+    Object.keys(counts).forEach(function(k){
+      var c = mk("span", "chip"); c.append(k + " ", mk("b", null, String(counts[k]))); stats.append(c);
+    });
+
+    var f = $("filters"); f.textContent = "";
+    var names = Object.keys(counts);
+    if (names.length > 1){
+      ["all"].concat(names).forEach(function(n){
+        var b = mk("button", null, n === "all" ? "全部" : n);
+        b.type = "button"; b.setAttribute("aria-pressed", String(colFilter === n));
+        b.onclick = function(){colFilter = n; render()};
+        f.append(b);
+      });
+    } else colFilter = "all";
+
+    var body = $("rows"); body.textContent = "";
+    var list = results.filter(function(r){return colFilter === "all" || r.col === colFilter});
+    var LIMIT = 1000;
+    if (!list.length){
+      var tr = mk("tr"), td = mk("td", "empty", wb ? "没有发现符合条件的格子。" : "请先选择文件。");
+      td.colSpan = 5; tr.append(td); body.append(tr);
+    }
+    list.slice(0, LIMIT).forEach(function(r){
+      var tr = mk("tr");
+      tr.append(mk("td", null, r.sheet), mk("td", "cell", r.addr), mk("td", null, r.col));
+      var v = mk("td", "val");
+      if (r.chars){
+        Array.from(r.value).forEach(function(ch){
+          if (r.chars.has(ch)) v.append(mk("mark", null, /\s/.test(ch) ? "␣" : ch)); else v.append(document.createTextNode(ch));
+        });
+      } else v.textContent = r.value === "" ? "（空白）" : r.value;
+      var why = mk("td");
+      r.reasons.forEach(function(x){why.append(mk("span", "tag", x))});
+      tr.append(v, why); body.append(tr);
+    });
+    if (list.length > LIMIT){
+      var t2 = mk("tr"), d2 = mk("td", "empty", "只显示前 " + LIMIT + " 项，下载的 Excel 会标出全部。");
+      d2.colSpan = 5; t2.append(d2); body.append(t2);
+    }
+    $("dl").disabled = !results.length || !downloads;
+    $("dl").title = downloads ? "" : "此环境不支持下载";
+  }
+
+  /* ---------- load ---------- */
+  function loadBuffer(buf, name, sample){
+    var w = new ExcelJS.Workbook();
+    return w.xlsx.load(buf.slice(0)).then(function(){
+      wb = w; srcBuf = buf; fileName = name; isSample = !!sample;
+      $("fname").textContent = name;
+      var rowsN = 0; w.eachSheet(function(ws){rowsN += Math.max(0, ws.rowCount - 1)});
+      $("fmeta").textContent = w.worksheets.length + " 个工作表，共 " + rowsN + " 行数据";
+      $("sampleNote").hidden = !sample;
+      scan();
+    }).catch(function(e){
+      $("err").textContent = "读不了这个文件：请确认它是 .xlsx 格式（旧的 .xls 请先另存为 .xlsx）。";
+    });
+  }
+  function readFile(file){
+    if (!file) return;
+    if (!/\.xlsx$/i.test(file.name)){ $("err").textContent = "目前只支持 .xlsx 文件（.xls 请先另存为 .xlsx）。"; return; }
+    var fr = new FileReader();
+    fr.onload = function(){ loadBuffer(fr.result, file.name, false) };
+    fr.readAsArrayBuffer(file);
+  }
+  function loadSample(){
+    var w = new ExcelJS.Workbook(), ws = w.addWorksheet("sheet1");
+    ws.addRow(["Receiver Name","Receiver Phone Number","Receiver Postcode","Receiver Address"]);
+    [
+      ["Mazanah bt judoh","60129658066",21400,"Kuala Terengganu"],
+      ["ZILA ABDUL RAZAK","601129292889",15200,"Jalan Dato Lundang Kota Bharu"],
+      ["Junaidah. binti. Ahmad","60123456789",40170,"Taman Setia Alam Shah Alam"],
+      ["陈大文","60187654321",50450,"Jalan Ampang Kuala Lumpur"],
+      ["José Muñoz","60111222333","8000","Sungai Petani Kedah"],
+      ["Aminah (Kak Min)","60199887766",47301,"9 SS5D Kelana Jaya"],
+      ["Lee Wei Ming","60166554433",1000,"Kampung Baru；Kangar"],
+      ["Suhaimi bin Ariffin","60174234782",35800,"Felda Sg Behrang Slim River Perak"],
+      ["Nurul Huda","60133445566",81100,"No 12, Jalan Molek 3, Johor Bahru"]
+    ].forEach(function(r){ws.addRow(r)});
+    ws.columns.forEach(function(c){c.width = 24});
+    return w.xlsx.writeBuffer().then(function(b){
+      var ab = b.buffer ? b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) : b;
+      return loadBuffer(ab, "示例文件.xlsx", true);
+    });
+  }
+
+  /* ---------- download ---------- */
+  function download(){
+    if (!srcBuf || !results.length || !downloads) return;
+    var btn = $("dl"); btn.disabled = true; btn.textContent = "生成中…";
+    var w = new ExcelJS.Workbook();
+    w.xlsx.load(srcBuf.slice(0)).then(function(){
+      results.forEach(function(r){
+        var ws = w.getWorksheet(r.sheet);
+        if (ws) ws.getCell(r.addr).fill = {type:"pattern", pattern:"solid", fgColor:{argb:"FFFFFF00"}, bgColor:{argb:"FFFFFF00"}};
+      });
+      return w.xlsx.writeBuffer();
+    }).then(function(buf){
+      var out = fileName.replace(/\.xlsx$/i, "") + "_highlighted.xlsx";
+      return downloads.save({filename: out, data: new Blob([buf])});
+    }).catch(function(e){
+      if (!e || e.code !== "declined") $("err").textContent = "下载失败：" + ((e && e.message) || "请稍后再试");
+    }).then(function(){
+      btn.textContent = "下载标黄的 Excel"; btn.disabled = !results.length || !downloads;
+    });
+  }
+
+  /* ---------- wiring ---------- */
+  $("pick").onclick = function(){$("file").click()};
+  $("file").onchange = function(e){readFile(e.target.files[0]); e.target.value = ""};
+  $("sampleBtn").onclick = loadSample;
+  $("dl").onclick = download;
+  ["textCols","digitOk","rDigit","rNonAscii","rSymbol","symbols","pcCol","pcMin"].forEach(function(id){
+    $(id).addEventListener("input", scan);
+  });
+  var drop = $("drop");
+  ["dragenter","dragover"].forEach(function(t){drop.addEventListener(t, function(e){e.preventDefault(); drop.classList.add("over")})});
+  ["dragleave","drop"].forEach(function(t){drop.addEventListener(t, function(e){e.preventDefault(); drop.classList.remove("over")})});
+  drop.addEventListener("drop", function(e){readFile(e.dataTransfer.files[0])});
+
+  render();
+  if (window.ExcelJS) loadSample();
+  else $("err").textContent = "无法加载 Excel 读取组件，请检查网络后刷新页面。";
+})();
+</script>
+</body>
+</html>
